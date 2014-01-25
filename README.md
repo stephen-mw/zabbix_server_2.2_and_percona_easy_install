@@ -1,6 +1,6 @@
 # Zabbix server 2.2 and Percona Mysql easy install
 
-## What is this
+## About
 Zabbix is an enterprise-class open source software for monitoring of networks and applications. Percona is a high-performance mysql fork. This is an easy-install script for quickly compiling Zabbix for use with Percona mysql. This install uses Zabbix 2.2 source code and Percona Mysql 5.6
 
 This install takes all of the work out of compiling and configuring the server. It's suitable for quickly getting a server online or for testing purposes.
