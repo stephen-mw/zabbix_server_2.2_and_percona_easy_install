@@ -1,0 +1,148 @@
+#!/bin/bash
+set -e
+
+# Zabbix server percona server installation
+
+# This script will compile Zabbix on top of percona 5.6.
+
+# This versioning should work with any version 2.2.x
+VERSION="2.2.1"
+SRC="http://downloads.sourceforge.net/project/zabbix/ZABBIX%20Latest%20Stable/$VERSION/zabbix-$VERSION.tar.gz"
+
+TIMEZONE="UTC"
+
+# Grab the fullpath of our root directory
+ROOT=$(cd `dirname ${BASH_SOURCE[0]}` && echo $PWD)
+
+apt-key adv --keyserver keys.gnupg.net --recv-keys 1C4CBDCDCD2EFD2A
+cat > /etc/apt/sources.list.d/percona.list <<PERCONALIST
+deb http://repo.percona.com/apt `lsb_release -c | awk '{print \$2}'` main
+deb-src http://repo.percona.com/apt `lsb_release -c | awk '{print \$2}'` main
+PERCONALIST
+
+apt-get update
+
+# So we don't get prompts
+export DEBIAN_FRONTEND=noninteractive
+
+PERCONA_VERSION="5.6"
+apt-get install -y --force-yes percona-server-server-$PERCONA_VERSION \
+                               percona-server-client-$PERCONA_VERSION
+
+echo
+echo -n "Input zabbix database password: "
+read ZABBIX_DB_PASS
+
+mysql -e "create database zabbix;"
+mysql -e "grant all privileges on zabbix.* to 'zabbix'@'localhost' identified \
+          by '$ZABBIX_DB_PASS';"
+
+# These packages are necessary to compile Zabbix server
+apt-get install -y apache2 build-essential libapache2-mod-php5        \
+                   libcurl4-openssl-dev libmysqld-dev libopenipmi-dev \
+                   libsnmp-dev libssh2-1-dev php5-cgi php5-gd php5-mysql
+
+# Add the zabbix user
+groupadd zabbix
+useradd -g zabbix zabbix
+
+mkdir -p /var/lib/zabbix
+pushd /var/lib/zabbix
+
+wget "$SRC"
+tar xf zabbix-$VERSION.tar.gz
+mv zabbix-$VERSION src
+pushd src
+
+./configure --enable-server --enable-agent --with-mysql --with-openipmi \
+            --with-libcurl --with-net-snmp --with-ssh2
+make
+make install
+
+# Populate the database with some basic information
+mysql -D zabbix < database/mysql/schema.sql
+mysql -D zabbix < database/mysql/images.sql
+mysql -D zabbix < database/mysql/data.sql
+
+mkdir /etc/zabbix
+mkdir /var/log/zabbix
+mkdir /var/run/zabbix
+
+cp misc/init.d/debian/* /etc/init.d/
+cp conf/zabbix_server.conf  /etc/zabbix
+
+chown zabbix:zabbix /etc/zabbix /var/log/zabbix /var/run/zabbix
+
+mkdir -p /var/www/vhost
+ln -s `pwd`/frontends/php /var/www/vhost/zabbix_server
+
+# Settings necessary to run zabbix
+sed -i 's/post_max_size = 8M/post_max_size = 16M/'           \
+  /etc/php5/apache2/php.ini
+sed -i 's/max_execution_time = 30/max_execution_time = 300/' \
+  /etc/php5/apache2/php.ini
+sed -i 's/max_input_time = 60/max_input_time = 300/'         \
+  /etc/php5/apache2/php.ini
+sed -i "s/;date.timezone =/date.timezone = $TIMEZONE/"       \
+  /etc/php5/apache2/php.ini
+
+# We'll populate the zabbix php conf with some general configs to get things started.
+#
+# You can always update this again by going to http://server/setup.php
+
+cat > /var/lib/zabbix/src/frontends/php/conf/zabbix.conf.php <<PHP
+<?php
+// Zabbix GUI configuration file
+global \$DB;
+
+\$DB['TYPE']     = 'MYSQL';
+\$DB['SERVER']   = 'localhost';
+\$DB['PORT']     = '0';
+\$DB['DATABASE'] = 'zabbix';
+\$DB['USER']     = 'zabbix';
+\$DB['PASSWORD'] = '$ZABBIX_DB_PASS';
+
+// SCHEMA is relevant only for IBM_DB2 database
+\$DB['SCHEMA'] = '';
+
+\$ZBX_SERVER      = 'localhost';
+\$ZBX_SERVER_PORT = '10051';
+\$ZBX_SERVER_NAME = '$(hostname -f)';
+
+\$IMAGE_FORMAT_DEFAULT = IMAGE_FORMAT_PNG;
+?>
+PHP
+
+# This zabbix vhost file is written to be listen on port 80
+cp $ROOT/zabbix_server /etc/apache2/sites-available/
+a2dissite default
+a2ensite zabbix_server
+
+chown -R www-data:www-data /var/lib/zabbix/src/frontends
+/etc/init.d/apache2 restart
+
+/etc/init.d/zabbix-server start
+/etc/init.d/zabbig-agent start
+
+cat - <<COMPLETE
+
+######################################
+#        Installation complete.      #
+######################################
+
+Zabbix server installation complete.
+
+The default password for zabbix is:
+ 
+  username: zabbix
+  password: admin
+
+If you would like to view or change to base configurations, you can go
+go http://yourserver/setup.php
+
+You may also want to go to:
+
+  https://tools.percona.com/wizard
+
+and build a percona my.cnf configuration suited to your needs.
+COMPLETE
