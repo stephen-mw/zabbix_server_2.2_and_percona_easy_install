@@ -1,5 +1,5 @@
 <VirtualHost *:80>
-	ServerAdmin stephen@moz.com
+	ServerAdmin root@localhost
 
 	DocumentRoot /var/www/vhost/zabbix_server
 	<Directory />
